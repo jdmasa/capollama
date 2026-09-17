@@ -85,7 +85,14 @@ func cleanKeyword(part string) string {
 
 // BuildXMP renders an XMP sidecar holding the caption as dc:description and the
 // keywords as dc:subject. dc:subject is left out when there are no keywords.
-func BuildXMP(description string, keywords []string) string {
+//
+// lang is the BCP 47 tag the caption was written in, or empty for English. When
+// set, the caption is written twice: once as x-default, which is what readers
+// that ignore languages pick up, and once tagged with the language itself. The
+// XMP spec expects the x-default item to repeat one of the other items, so the
+// duplication is intended. dc:subject is an unordered bag of plain text and
+// carries no language qualifier.
+func BuildXMP(description string, keywords []string, lang string) string {
 	var b strings.Builder
 	b.WriteString(`<?xml version="1.0" encoding="UTF-8"?>` + "\n")
 	fmt.Fprintf(&b, `<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="%s">`+"\n",
@@ -97,6 +104,9 @@ func BuildXMP(description string, keywords []string) string {
 	b.WriteString(`   <dc:description>` + "\n")
 	b.WriteString(`    <rdf:Alt>` + "\n")
 	fmt.Fprintf(&b, `     <rdf:li xml:lang="x-default">%s</rdf:li>`+"\n", xmlEscape(description))
+	if lang != "" {
+		fmt.Fprintf(&b, `     <rdf:li xml:lang="%s">%s</rdf:li>`+"\n", xmlEscape(lang), xmlEscape(description))
+	}
 	b.WriteString(`    </rdf:Alt>` + "\n")
 	b.WriteString(`   </dc:description>` + "\n")
 
@@ -126,9 +136,23 @@ func xmlEscape(text string) string {
 
 // Labels accepted by the single pass parser. Models drift between synonyms, so
 // the common ones are all treated as the same field.
+// The prompt asks for English labels even when the caption itself is written in
+// another language, but models translate them anyway, so the common
+// translations are accepted as well.
 var (
-	descriptionLabels = []string{"description:", "caption:"}
-	keywordLabels     = []string{"keywords:", "keyword:", "tags:", "subject:"}
+	descriptionLabels = []string{
+		"description:", "caption:",
+		"descripción:", "descripcion:", "leyenda:",
+		"description :", "légende:", "legende:",
+		"beschreibung:", "descrizione:", "descrição:", "descricao:", "descripció:",
+	}
+	keywordLabels = []string{
+		"keywords:", "keyword:", "tags:", "subject:",
+		"palabras clave:", "palabras-clave:", "etiquetas:",
+		"mots-clés:", "mots clés:", "mots-cles:",
+		"schlüsselwörter:", "schlagwörter:", "stichwörter:",
+		"parole chiave:", "palavras-chave:", "palavras chave:", "paraules clau:",
+	}
 )
 
 // findLabel returns where the earliest of labels starts in lower (searching

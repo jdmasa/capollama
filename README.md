@@ -7,6 +7,7 @@ Capollama is a command-line tool that generates image captions using either Olla
 - Process single images or recursively scan directories
 - Support for JPG, JPEG, and PNG formats
 - Customizable caption prompts
+- Captions and keywords in any language the model speaks
 - Optional prefix and suffix for captions
 - Automatic caption file generation with dry-run option
 - **Optional XMP sidecar output with `dc:description` and `dc:subject` keywords**
@@ -63,7 +64,7 @@ capollama path/to/images/directory
 ### Command Line Arguments
 
 ```
-Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--force-one-sentence] [--force] PATH
+Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--language LANGUAGE] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--force-one-sentence] [--force] PATH
 
 Positional arguments:
   PATH                   Path to an image or a directory with images
@@ -80,6 +81,8 @@ Options:
                          The model that will be used (must be a vision model like "llama3.2-vision" or "llava") [default: qwen2.5vl, env: CAPOLLAMA_MODEL]
   --openai OPENAI, -o OPENAI
                          If given a url the app will use the OpenAI protocol instead of the Ollama API [env: CAPOLLAMA_OPENAI]
+  --language LANGUAGE, -l LANGUAGE
+                         Language the captions and keywords are written in, as a name ("Spanish") or a code ("es", "es-ES") [default: English, env: CAPOLLAMA_LANGUAGE]
   --api-key API-KEY      API key for OpenAI-compatible endpoints (optional for lm-studio/ollama) [env: CAPOLLAMA_API_KEY]
   --xmp, -x              Write an XMP sidecar (image.jpg.xmp) with dc:description and dc:subject instead of a .txt caption [env: CAPOLLAMA_XMP]
   --keyword-model KEYWORD-MODEL, -k KEYWORD-MODEL
@@ -142,6 +145,40 @@ Get both fields from a single request, which is roughly twice as fast:
 ```bash
 capollama --xmp --single-pass path/to/images/
 ```
+
+## Language
+
+`--language` (or `CAPOLLAMA_LANGUAGE`) sets the language of both the caption and
+the keywords. It takes a name or a BCP 47 code, so all of these are the same:
+
+```bash
+capollama --language Spanish image.jpg
+capollama --language es image.jpg
+capollama -l es-ES image.jpg
+```
+
+The instruction is appended to whichever prompt is in use, so it works with
+`.txt` captions, the two pass XMP mode and `--single-pass` alike, and it applies
+to your own `--prompt` as well. With `--single-pass` the model is told to keep
+the `DESCRIPTION` and `KEYWORDS` labels in English; the parser also accepts the
+usual translations of them in case it does not.
+
+In an XMP sidecar the caption is then written twice, once as `x-default` for
+readers that ignore languages and once tagged with the language, which exiftool
+reports as `XMP-dc:Description-es`:
+
+```xml
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">Un gato naranja sentado en una terraza de madera soleada.</rdf:li>
+     <rdf:li xml:lang="es">Un gato naranja sentado en una terraza de madera soleada.</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+```
+
+`dc:subject` carries no language qualifier, as XMP defines it as an unordered
+bag of plain text. A language outside the built-in table is still passed to the
+model by name, but the sidecar then stays `x-default` only and a warning says so.
 
 ## XMP output
 

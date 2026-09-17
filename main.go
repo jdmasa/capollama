@@ -69,6 +69,7 @@ type cmdArgs struct {
 	EndCaption       string `arg:"--end,-e,env:CAPOLLAMA_END" help:"End the caption with this (in the style of 'something')"`
 	Model            string `arg:"--model,-m,env:CAPOLLAMA_MODEL" help:"The model that will be used (must be a vision model like \"llama3.2-vision\" or \"llava\")" default:"qwen2.5vl"`
 	OpenAPI          string `arg:"--openai,-o,env:CAPOLLAMA_OPENAI" help:"If given a url the app will use the OpenAI protocol instead of the Ollama API" default:""`
+	Language         string `arg:"--language,-l,env:CAPOLLAMA_LANGUAGE" help:"Language the captions and keywords are written in, as a name (\"Spanish\") or a code (\"es\", \"es-ES\")" default:"English"`
 	ApiKey           string `arg:"--api-key,env:CAPOLLAMA_API_KEY" help:"API key for OpenAI-compatible endpoints (optional for lm-studio/ollama)" default:""`
 	XMP              bool   `arg:"--xmp,-x,env:CAPOLLAMA_XMP" help:"Write an XMP sidecar (image.jpg.xmp) with dc:description and dc:subject instead of a .txt caption"`
 	KeywordModel     string `arg:"--keyword-model,-k,env:CAPOLLAMA_KEYWORD_MODEL" help:"Vision model used for the keyword pass of --xmp (defaults to --model)" default:""`
@@ -363,6 +364,15 @@ func main() {
 		}
 	}
 
+	lang := parseLanguage(args.Language)
+	if !lang.IsEnglish() && lang.Code == "" {
+		log.Printf("Warning: unknown language %q, asking the model for it anyway but tagging the sidecar as x-default only", args.Language)
+	}
+	// The language instruction is appended once, not per image.
+	prompt := lang.Instruct(args.Prompt)
+	keywordPrompt := lang.Instruct(args.KeywordPrompt)
+	singlePassPrompt := lang.InstructSinglePass(args.SinglePassPrompt)
+
 	// The keyword pass looks at the image a second time, so it defaults to the
 	// same vision model that wrote the caption.
 	keywordModel := args.KeywordModel
@@ -402,6 +412,9 @@ func main() {
 	if args.SinglePass {
 		fmt.Printf("Using a single pass for description and keywords\n")
 	}
+	if !lang.IsEnglish() {
+		fmt.Printf("Using Language: %s\n", args.Language)
+	}
 	if args.XMP {
 		fmt.Printf("Writing: XMP sidecars (dc:description%s)\n",
 			map[bool]string{true: " and dc:subject", false: ""}[withKeywords])
@@ -426,7 +439,7 @@ func main() {
 		var keywords []string
 
 		if args.SinglePass {
-			answer, err := cl.Chat(args.Model, args.SinglePassPrompt, args.System, singlePassOptions(), path)
+			answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(), path)
 			if err != nil {
 				log.Fatalf("Aborting because of %v", err)
 			}
@@ -436,13 +449,13 @@ func main() {
 				log.Printf("Warning: no keyword line in the answer for %s, keeping the reply as the description", name)
 			}
 		} else {
-			text, err := cl.Chat(args.Model, args.Prompt, args.System, options(args), path)
+			text, err := cl.Chat(args.Model, prompt, args.System, options(args), path)
 			if err != nil {
 				log.Fatalf("Aborting because of %v", err)
 			}
 			captionText = text
 			if withKeywords {
-				rawKeywords, err := cl.Chat(keywordModel, args.KeywordPrompt, args.KeywordSystem, keywordOptions(), path)
+				rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(), path)
 				if err != nil {
 					log.Fatalf("Aborting because of %v", err)
 				}
@@ -466,7 +479,7 @@ func main() {
 
 		content := captionText
 		if args.XMP {
-			content = BuildXMP(captionText, keywords)
+			content = BuildXMP(captionText, keywords, lang.Tag())
 		}
 		if err := os.WriteFile(captionFile, []byte(content), 0644); err != nil {
 			log.Fatalf("Could not write file %q", err)
