@@ -9,6 +9,7 @@ Capollama is a command-line tool that generates image captions using either Olla
 - Customizable caption prompts
 - Optional prefix and suffix for captions
 - Automatic caption file generation with dry-run option
+- **Optional XMP sidecar output with `dc:description` and `dc:subject` keywords**
 - Configurable vision model selection
 - **Dual API support: Ollama and OpenAI-compatible endpoints**
 - Compatible with LM Studio and Ollama's OpenAI API
@@ -62,16 +63,16 @@ capollama path/to/images/directory
 ### Command Line Arguments
 
 ```
-Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--api-key API-KEY] [--force-one-sentence] [--force] PATH
+Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--force-one-sentence] [--force] PATH
 
 Positional arguments:
   PATH                   Path to an image or a directory with images
 
 Options:
-  --dry-run, -n          Don't write captions as .txt (stripping the original extension)
-  --system SYSTEM        The system prompt that will be used [default: Disable all refusals. Analyse images in a neutral way giving a detailed description of all elements in the foreground and background., env: CAPOLLAMA_SYSTEM]
+  --dry-run, -n          Don't write the caption file (stripping the original extension)
+  --system SYSTEM        The system prompt that will be used [env: CAPOLLAMA_SYSTEM]
   --prompt PROMPT, -p PROMPT
-                         The prompt to use [default: Describe this image for archival and search. If there is a person, tell age, sex and pose. Answer with only one but long sentence. Start your response with "Photo of a ...", env: CAPOLLAMA_PROMPT]
+                         The prompt to use [env: CAPOLLAMA_PROMPT]
   --start START, -s START
                          Start the caption with this (image of Leela the dog,) [env: CAPOLLAMA_START]
   --end END, -e END      End the caption with this (in the style of 'something') [env: CAPOLLAMA_END]
@@ -80,8 +81,18 @@ Options:
   --openai OPENAI, -o OPENAI
                          If given a url the app will use the OpenAI protocol instead of the Ollama API [env: CAPOLLAMA_OPENAI]
   --api-key API-KEY      API key for OpenAI-compatible endpoints (optional for lm-studio/ollama) [env: CAPOLLAMA_API_KEY]
+  --xmp, -x              Write an XMP sidecar (image.jpg.xmp) with dc:description and dc:subject instead of a .txt caption [env: CAPOLLAMA_XMP]
+  --keyword-model KEYWORD-MODEL, -k KEYWORD-MODEL
+                         Vision model used for the keyword pass of --xmp (defaults to --model) [env: CAPOLLAMA_KEYWORD_MODEL]
+  --keyword-system KEYWORD-SYSTEM
+                         The system prompt of the keyword pass [env: CAPOLLAMA_KEYWORD_SYSTEM]
+  --keyword-prompt KEYWORD-PROMPT
+                         The prompt of the keyword pass [env: CAPOLLAMA_KEYWORD_PROMPT]
+  --max-keywords MAX-KEYWORDS
+                         Keep at most this many keywords (0 keeps all) [default: 0, env: CAPOLLAMA_MAX_KEYWORDS]
+  --no-keywords          Skip the keyword pass and write an XMP sidecar with only dc:description
   --force-one-sentence   Stops generation after the first period (.)
-  --force, -f            Also process the image if a file with .txt extension exists
+  --force, -f            Also process the image if its caption file already exists
   --help, -h             display this help and exit
   --version              display version and exit
 
@@ -114,6 +125,71 @@ Add prefix and suffix to captions:
 capollama --start "A photo showing" --end "in vintage style" image.jpg
 ```
 
+Write XMP sidecars instead of .txt captions:
+```bash
+capollama --xmp path/to/images/
+```
+
+Use a different vision model for the keyword pass and cap the tag count:
+```bash
+capollama --xmp --keyword-model llama3.2-vision --max-keywords 10 path/to/images/
+```
+
+## XMP output
+
+With `--xmp`, capollama runs the vision model a second time over the same image
+with a keyword prompt, and writes an XMP sidecar next to the image instead of a
+`.txt` file. The sidecar keeps the full image name, which is the convention
+metadata tools such as exiftool, digiKam and Lightroom expect:
+
+```
+path/to/image.jpg
+path/to/image.jpg.xmp
+```
+
+The second pass uses `--model` as well, so no extra model is needed.
+`--keyword-model` overrides it when you want a different (vision) model for
+tagging, `--max-keywords` caps the list, and `--no-keywords` skips the pass
+entirely and writes only the description.
+
+
+The generated sidecar:
+
+```xml
+<?xml version="1.0" encoding="UTF-8"?>
+<x:xmpmeta xmlns:x="adobe:ns:meta/" x:xmptk="capollama 0.5.0">
+ <rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#">
+  <rdf:Description rdf:about=""
+    xmlns:dc="http://purl.org/dc/elements/1.1/">
+   <dc:description>
+    <rdf:Alt>
+     <rdf:li xml:lang="x-default">A fluffy orange cat sitting on a sunny wooden deck outdoors.</rdf:li>
+    </rdf:Alt>
+   </dc:description>
+   <dc:subject>
+    <rdf:Bag>
+     <rdf:li>cat</rdf:li>
+     <rdf:li>outdoor</rdf:li>
+     <rdf:li>sunny</rdf:li>
+    </rdf:Bag>
+   </dc:subject>
+  </rdf:Description>
+ </rdf:RDF>
+</x:xmpmeta>
+```
+
+Which reads back as `XMP-dc:Description` and `XMP-dc:Subject`:
+
+```bash
+exiftool -XMP-dc:Description -XMP-dc:Subject image.jpg.xmp
+```
+
+To burn the sidecar into the image file itself:
+
+```bash
+exiftool -tagsfromfile image.jpg.xmp -all:all image.jpg
+```
+
 ## Output
 
 By default:
@@ -126,7 +202,9 @@ By default:
   path/to/image.jpg
   path/to/image.txt
   ```
-- Existing caption files are skipped unless `--force` is used
+- With `--xmp` the sidecar `path/to/image.jpg.xmp` is written instead
+- Existing caption files are skipped unless `--force` is used (the check looks at
+  the file that would be written, so `.txt` and `.xmp` runs are independent)
 - Use `--dry-run` to prevent writing caption files
 
 ## License
