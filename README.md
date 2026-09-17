@@ -1,5 +1,7 @@
 # Capollama
 
+[![CI](https://github.com/jdmasa/capollama/actions/workflows/ci.yml/badge.svg)](https://github.com/jdmasa/capollama/actions/workflows/ci.yml)
+
 Capollama is a command-line tool that generates image captions using either Ollama's vision models or OpenAI-compatible APIs. It can process single images or entire directories, optionally saving the captions as text files alongside the images.
 
 ## Features
