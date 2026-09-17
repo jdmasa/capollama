@@ -76,6 +76,8 @@ type cmdArgs struct {
 	KeywordPrompt    string `arg:"--keyword-prompt,env:CAPOLLAMA_KEYWORD_PROMPT" help:"The prompt of the keyword pass" default:"List the subjects, objects, location, setting, activity, style and mood of this image as keywords for image search. Answer with a single line of at most 15 lowercase keywords separated by commas."`
 	MaxKeywords      int    `arg:"--max-keywords,env:CAPOLLAMA_MAX_KEYWORDS" help:"Keep at most this many keywords (0 keeps all)" default:"0"`
 	NoKeywords       bool   `arg:"--no-keywords" help:"Skip the keyword pass and write an XMP sidecar with only dc:description"`
+	SinglePass       bool   `arg:"--single-pass,env:CAPOLLAMA_SINGLE_PASS" help:"Get the description and the keywords from one request instead of two (faster, but needs a model that keeps to the answer format)"`
+	SinglePassPrompt string `arg:"--single-pass-prompt,env:CAPOLLAMA_SINGLE_PASS_PROMPT" help:"The prompt of the single pass" default:"Describe and tag this image for archival and search. Answer with exactly two lines and nothing else:\nDESCRIPTION: one long sentence describing the image, starting with \"A ...\". If there is a person, tell age, sex and pose.\nKEYWORDS: at most 15 lowercase keywords separated by commas, covering subjects, objects, location, setting, activity, style and mood."`
 	ForceOneSentence bool   `arg:"--force-one-sentence" help:"Stops generation after the first period (.)"`
 	Force            bool   `arg:"--force,-f" help:"Also process the image if its caption file already exists"`
 }
@@ -106,6 +108,17 @@ func options(args cmdArgs) map[string]any {
 func keywordOptions() map[string]any {
 	return map[string]any{
 		"num_predict": 200,
+		"temperature": 0,
+		"seed":        1,
+	}
+}
+
+// singlePassOptions are the options of the combined pass. It has to fit a
+// description and a keyword list into one answer, so it gets a larger budget
+// than a caption alone.
+func singlePassOptions() map[string]any {
+	return map[string]any{
+		"num_predict": 400,
 		"temperature": 0,
 		"seed":        1,
 	}
@@ -326,6 +339,7 @@ func main() {
 			{"--keyword-model", args.KeywordModel != ""},
 			{"--max-keywords", args.MaxKeywords != 0},
 			{"--no-keywords", args.NoKeywords},
+			{"--single-pass", args.SinglePass},
 		} {
 			if flag.used {
 				parser.Fail(fmt.Sprintf("%s only applies to --xmp output", flag.name))
@@ -334,6 +348,19 @@ func main() {
 	}
 	if args.MaxKeywords < 0 {
 		parser.Fail("--max-keywords cannot be negative")
+	}
+	if args.SinglePass {
+		// The combined pass answers with one description line and one keyword
+		// line, which leaves nothing for these to act on.
+		if args.NoKeywords {
+			parser.Fail("--single-pass and --no-keywords contradict each other")
+		}
+		if args.KeywordModel != "" {
+			parser.Fail("--keyword-model cannot be combined with --single-pass, which uses --model for both fields")
+		}
+		if args.ForceOneSentence {
+			parser.Fail("--force-one-sentence cannot be combined with --single-pass, as it would cut the answer before the keywords")
+		}
 	}
 
 	// The keyword pass looks at the image a second time, so it defaults to the
@@ -369,8 +396,11 @@ func main() {
 	}
 
 	fmt.Printf("Using Model: %s\n", args.Model)
-	if withKeywords {
+	if withKeywords && !args.SinglePass {
 		fmt.Printf("Using Keyword Model: %s\n", keywordModel)
+	}
+	if args.SinglePass {
+		fmt.Printf("Using a single pass for description and keywords\n")
 	}
 	if args.XMP {
 		fmt.Printf("Writing: XMP sidecars (dc:description%s)\n",
@@ -392,18 +422,32 @@ func main() {
 
 		name := strings.TrimPrefix(path, root)
 
-		captionText, err := cl.Chat(args.Model, args.Prompt, args.System, options(args), path)
-		if err != nil {
-			log.Fatalf("Aborting because of %v", err)
-		}
-
+		var captionText string
 		var keywords []string
-		if withKeywords {
-			rawKeywords, err := cl.Chat(keywordModel, args.KeywordPrompt, args.KeywordSystem, keywordOptions(), path)
+
+		if args.SinglePass {
+			answer, err := cl.Chat(args.Model, args.SinglePassPrompt, args.System, singlePassOptions(), path)
 			if err != nil {
 				log.Fatalf("Aborting because of %v", err)
 			}
-			keywords = ParseKeywords(rawKeywords)
+			var ok bool
+			captionText, keywords, ok = ParseSinglePass(answer)
+			if !ok {
+				log.Printf("Warning: no keyword line in the answer for %s, keeping the reply as the description", name)
+			}
+		} else {
+			text, err := cl.Chat(args.Model, args.Prompt, args.System, options(args), path)
+			if err != nil {
+				log.Fatalf("Aborting because of %v", err)
+			}
+			captionText = text
+			if withKeywords {
+				rawKeywords, err := cl.Chat(keywordModel, args.KeywordPrompt, args.KeywordSystem, keywordOptions(), path)
+				if err != nil {
+					log.Fatalf("Aborting because of %v", err)
+				}
+				keywords = ParseKeywords(rawKeywords)
+			}
 		}
 
 		captionText = strings.TrimSpace(args.StartCaption + " " + captionText + " " + args.EndCaption)

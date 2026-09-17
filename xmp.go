@@ -123,3 +123,71 @@ func xmlEscape(text string) string {
 	}
 	return buf.String()
 }
+
+// Labels accepted by the single pass parser. Models drift between synonyms, so
+// the common ones are all treated as the same field.
+var (
+	descriptionLabels = []string{"description:", "caption:"}
+	keywordLabels     = []string{"keywords:", "keyword:", "tags:", "subject:"}
+)
+
+// findLabel returns where the earliest of labels starts in lower (searching
+// from index from) and where it ends. Matching happens on an already lowercased
+// copy of the text so the indexes stay valid for the original.
+func findLabel(lower string, labels []string, from int) (start, after int, found bool) {
+	start = -1
+	for _, label := range labels {
+		index := strings.Index(lower[from:], label)
+		if index < 0 {
+			continue
+		}
+		index += from
+		if !found || index < start {
+			start, after, found = index, index+len(label), true
+		}
+	}
+	return start, after, found
+}
+
+// ParseSinglePass splits the combined reply of the single pass into caption and
+// keywords. It searches for the labels anywhere in the text, so a model that
+// answers on one line is handled as well as one that uses two. When no keyword
+// label shows up, ok is false and the whole reply is returned as the caption,
+// which keeps a malformed answer from losing the description too.
+func ParseSinglePass(raw string) (description string, keywords []string, ok bool) {
+	text := stripCodeFence(strings.TrimSpace(raw))
+	lower := strings.ToLower(text)
+
+	_, descriptionAt, hasDescription := findLabel(lower, descriptionLabels, 0)
+	searchFrom := 0
+	if hasDescription {
+		searchFrom = descriptionAt
+	}
+	keywordStart, keywordAt, hasKeywords := findLabel(lower, keywordLabels, searchFrom)
+
+	switch {
+	case hasDescription && hasKeywords:
+		description = text[descriptionAt:keywordStart]
+	case hasDescription:
+		description = text[descriptionAt:]
+	case hasKeywords:
+		description = text[:keywordStart]
+	default:
+		description = text
+	}
+
+	if hasKeywords {
+		keywords = ParseKeywords(text[keywordAt:])
+	}
+	return cleanLine(description), keywords, hasKeywords
+}
+
+// cleanLine folds a possibly multi line answer into one caption line and strips
+// the markdown decoration models like to wrap it in.
+func cleanLine(text string) string {
+	line := strings.Join(strings.Fields(text), " ")
+	// Bullets, numbering decoration and stray label punctuation can sit on
+	// either end once the labels themselves are cut away.
+	line = strings.Trim(line, "*_#`-•: \t")
+	return strings.Trim(line, `"' `)
+}

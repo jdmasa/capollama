@@ -63,7 +63,7 @@ capollama path/to/images/directory
 ### Command Line Arguments
 
 ```
-Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--force-one-sentence] [--force] PATH
+Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--force-one-sentence] [--force] PATH
 
 Positional arguments:
   PATH                   Path to an image or a directory with images
@@ -91,6 +91,9 @@ Options:
   --max-keywords MAX-KEYWORDS
                          Keep at most this many keywords (0 keeps all) [default: 0, env: CAPOLLAMA_MAX_KEYWORDS]
   --no-keywords          Skip the keyword pass and write an XMP sidecar with only dc:description
+  --single-pass          Get the description and the keywords from one request instead of two (faster, but needs a model that keeps to the answer format) [env: CAPOLLAMA_SINGLE_PASS]
+  --single-pass-prompt SINGLE-PASS-PROMPT
+                         The prompt of the single pass [env: CAPOLLAMA_SINGLE_PASS_PROMPT]
   --force-one-sentence   Stops generation after the first period (.)
   --force, -f            Also process the image if its caption file already exists
   --help, -h             display this help and exit
@@ -135,6 +138,11 @@ Use a different vision model for the keyword pass and cap the tag count:
 capollama --xmp --keyword-model llama3.2-vision --max-keywords 10 path/to/images/
 ```
 
+Get both fields from a single request, which is roughly twice as fast:
+```bash
+capollama --xmp --single-pass path/to/images/
+```
+
 ## XMP output
 
 With `--xmp`, capollama runs the vision model a second time over the same image
@@ -152,6 +160,27 @@ The second pass uses `--model` as well, so no extra model is needed.
 tagging, `--max-keywords` caps the list, and `--no-keywords` skips the pass
 entirely and writes only the description.
 
+### Single pass
+
+`--single-pass` asks for both fields in one request instead of two, which
+roughly halves the time per image. The model is asked to answer in two labelled
+lines:
+
+```
+DESCRIPTION: A fluffy orange cat sitting on a sunny wooden deck outdoors.
+KEYWORDS: cat, outdoor, sunny, deck
+```
+
+The parser finds those labels anywhere in the reply and also accepts `CAPTION:`,
+`TAGS:`, markdown decoration and bullet lists, since models drift. If no keyword
+label shows up at all, the whole reply is kept as the description and a warning
+is printed, so a malformed answer never costs you the caption as well.
+
+It is a trade: smaller vision models write a weaker caption when the same turn
+also has to produce tags. Compare both on your own material before switching a
+large archive over. `--single-pass-prompt` (or `CAPOLLAMA_SINGLE_PASS_PROMPT`)
+replaces the combined prompt, and `--force-one-sentence` is refused in this mode
+because its stop token would cut the answer before the keywords.
 
 The generated sidecar:
 
