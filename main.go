@@ -79,6 +79,7 @@ type cmdArgs struct {
 	NoKeywords       bool   `arg:"--no-keywords" help:"Skip the keyword pass and write an XMP sidecar with only dc:description"`
 	SinglePass       bool   `arg:"--single-pass,env:CAPOLLAMA_SINGLE_PASS" help:"Get the description and the keywords from one request instead of two (faster, but needs a model that keeps to the answer format)"`
 	SinglePassPrompt string `arg:"--single-pass-prompt,env:CAPOLLAMA_SINGLE_PASS_PROMPT" help:"The prompt of the single pass" default:"Describe and tag this image for archival and search. Answer with exactly two lines and nothing else:\nDESCRIPTION: one long sentence describing the image, starting with \"A ...\". If there is a person, tell age, sex and pose.\nKEYWORDS: at most 15 lowercase keywords separated by commas, covering subjects, objects, location, setting, activity, style and mood."`
+	NoFormatCheck    bool   `arg:"--no-format-check,env:CAPOLLAMA_NO_FORMAT_CHECK" help:"Send every file the extension claims is an image, instead of checking its magic bytes first"`
 	ForceOneSentence bool   `arg:"--force-one-sentence" help:"Stops generation after the first period (.)"`
 	Force            bool   `arg:"--force,-f" help:"Also process the image if its caption file already exists"`
 }
@@ -204,17 +205,9 @@ func ChatWithImageOpenAI(client *openai.Client, model string, prompt string, sys
 	// Encode image to base64
 	base64Image := base64.StdEncoding.EncodeToString(imageData)
 
-	// Determine the image MIME type based on file extension
-	ext := strings.ToLower(filepath.Ext(imagePath))
-	var mimeType string
-	switch ext {
-	case ".jpg", ".jpeg":
-		mimeType = "image/jpeg"
-	case ".png":
-		mimeType = "image/png"
-	default:
-		mimeType = "image/jpeg" // Default fallback
-	}
+	// The media type comes from the content rather than the extension, which
+	// is not always telling the truth.
+	mimeType := MimeType(SniffFormat(imageData))
 
 	// Build messages array
 	var messages []openai.ChatCompletionMessage
@@ -434,6 +427,18 @@ func main() {
 		}
 
 		name := strings.TrimPrefix(path, root)
+
+		if !args.NoFormatCheck {
+			format, err := SniffFile(path)
+			if err != nil {
+				log.Printf("Skipping %s: %v", name, err)
+				return
+			}
+			if reason := SkipReason(format); reason != "" {
+				log.Printf("Skipping %s: %s", name, reason)
+				return
+			}
+		}
 
 		var captionText string
 		var keywords []string

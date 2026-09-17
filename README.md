@@ -15,6 +15,7 @@ Capollama is a command-line tool that generates image captions using either Olla
 - **Dual API support: Ollama and OpenAI-compatible endpoints**
 - Compatible with LM Studio and Ollama's OpenAI API
 - Skips hidden directories (starting with '.')
+- Checks the real image format by magic bytes, not by file extension
 - Skip existing captions by default with force option available
 
 ## Prerequisites
@@ -64,7 +65,7 @@ capollama path/to/images/directory
 ### Command Line Arguments
 
 ```
-Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--language LANGUAGE] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--force-one-sentence] [--force] PATH
+Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--language LANGUAGE] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--no-format-check] [--force-one-sentence] [--force] PATH
 
 Positional arguments:
   PATH                   Path to an image or a directory with images
@@ -97,6 +98,7 @@ Options:
   --single-pass          Get the description and the keywords from one request instead of two (faster, but needs a model that keeps to the answer format) [env: CAPOLLAMA_SINGLE_PASS]
   --single-pass-prompt SINGLE-PASS-PROMPT
                          The prompt of the single pass [env: CAPOLLAMA_SINGLE_PASS_PROMPT]
+  --no-format-check      Send every file the extension claims is an image, instead of checking its magic bytes first [env: CAPOLLAMA_NO_FORMAT_CHECK]
   --force-one-sentence   Stops generation after the first period (.)
   --force, -f            Also process the image if its caption file already exists
   --help, -h             display this help and exit
@@ -145,6 +147,31 @@ Get both fields from a single request, which is roughly twice as fast:
 ```bash
 capollama --xmp --single-pass path/to/images/
 ```
+
+## Image formats
+
+Only JPEG and PNG can be sent to the vision APIs. Extensions lie about this more
+often than you would think: phones and photo managers leave JPEG XL, HEIC and
+WebP files behind under a `.jpg` name, and the API then answers `Failed to load
+image or audio file`, which used to abort the whole run.
+
+Every file is therefore identified by its magic bytes before a request is spent
+on it, and one that cannot be read is reported and skipped while the run
+continues:
+
+```
+Skipping /holiday.jpg: JPEG XL, which the vision API cannot read, despite the file name
+Skipping /notes.png: not a JPEG or PNG
+```
+
+JPEG XL, HEIC, AVIF, WebP, GIF, BMP, TIFF and SVG are recognised by name so the
+message tells you what the file really is. Convert them first, for example with
+`sips -s format jpeg broken.jpg --out fixed.jpg` on macOS or `magick` elsewhere.
+`--no-format-check` turns the check off for a backend that accepts more formats
+than these two.
+
+The check runs after the skip-existing test, so a file that already has a
+caption costs nothing either way.
 
 ## Language
 
