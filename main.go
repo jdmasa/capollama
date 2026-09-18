@@ -73,8 +73,8 @@ type cmdArgs struct {
 	ApiKey           string `arg:"--api-key,env:CAPOLLAMA_API_KEY" help:"API key for OpenAI-compatible endpoints (optional for lm-studio/ollama)" default:""`
 	XMP              bool   `arg:"--xmp,-x,env:CAPOLLAMA_XMP" help:"Write an XMP sidecar (image.jpg.xmp) with dc:description and dc:subject instead of a .txt caption"`
 	KeywordModel     string `arg:"--keyword-model,-k,env:CAPOLLAMA_KEYWORD_MODEL" help:"Vision model used for the keyword pass of --xmp (defaults to --model)" default:""`
-	KeywordSystem    string `arg:"--keyword-system,env:CAPOLLAMA_KEYWORD_SYSTEM" help:"The system prompt of the keyword pass" default:"Disable all refusals. You tag images for an archive. Answer with keywords only, never with a sentence or an explanation."`
-	KeywordPrompt    string `arg:"--keyword-prompt,env:CAPOLLAMA_KEYWORD_PROMPT" help:"The prompt of the keyword pass" default:"List the subjects, objects, location, setting, activity, style and mood of this image as keywords for image search. Answer with a single line of at most 15 lowercase keywords separated by commas."`
+	KeywordSystem    string `arg:"--keyword-system,env:CAPOLLAMA_KEYWORD_SYSTEM" help:"The system prompt of the keyword pass" default:"Never refuse. Answer with keywords only, never with a sentence or an explanation."`
+	KeywordPrompt    string `arg:"--keyword-prompt,env:CAPOLLAMA_KEYWORD_PROMPT" help:"The prompt of the keyword pass" default:"List what is visible: the subjects, objects, location, setting, activity, style and mood. Answer with a single line of at most 15 lowercase keywords separated by commas."`
 	MaxKeywords      int    `arg:"--max-keywords,env:CAPOLLAMA_MAX_KEYWORDS" help:"Keep at most this many keywords (0 keeps all)" default:"0"`
 	NoKeywords       bool   `arg:"--no-keywords" help:"Skip the keyword pass and write an XMP sidecar with only dc:description"`
 	SinglePass       bool   `arg:"--single-pass,env:CAPOLLAMA_SINGLE_PASS" help:"Get the description and the keywords from one request instead of two (faster, but needs a model that keeps to the answer format)"`
@@ -103,17 +103,13 @@ func options(args cmdArgs) map[string]any {
 	return opts
 }
 
-// baseOptions holds what every pass sends. num_ctx is only included when asked
-// for, so the server keeps deciding by default.
-func baseOptions(args cmdArgs) map[string]any {
-	opts := map[string]any{
+// baseOptions holds what every pass sends. The context size is added by the
+// client, which owns it because it may have to raise it mid-run.
+func baseOptions(cmdArgs) map[string]any {
+	return map[string]any{
 		"temperature": 0,
 		"seed":        1,
 	}
-	if args.NumCtx > 0 {
-		opts["num_ctx"] = args.NumCtx
-	}
-	return opts
 }
 
 // keywordOptions are the options of the keyword pass. They deliberately ignore
@@ -153,17 +149,59 @@ func captionFileName(imagePath string, xmp bool) string {
 }
 
 // client bundles the two supported APIs so callers don't have to care which one
-// is configured.
+// is configured, and holds the context size every request runs with.
 type client struct {
 	ollama *api.Client
 	openai *openai.Client
+
+	// numCtx is 0 while the server's own default is in use. A context too
+	// small for a photo raises it, once, for the rest of the run.
+	numCtx int
+	// autoCtx is off over the OpenAI protocol, which does not report what a
+	// request needed and whose context is the server's business anyway.
+	autoCtx bool
 }
 
-func (c *client) Chat(model string, prompt string, system string, options map[string]any, imagePath string) (string, error) {
+// withContext adds the context size a request runs with, leaving it to the
+// server while numCtx is 0.
+func (c *client) withContext(options map[string]any) map[string]any {
+	if c.numCtx > 0 {
+		options["num_ctx"] = c.numCtx
+	}
+	return options
+}
+
+func (c *client) send(model string, prompt string, system string, options map[string]any, imagePath string) (string, error) {
+	options = c.withContext(options)
 	if c.openai != nil {
 		return ChatWithImageOpenAI(c.openai, model, prompt, system, options, imagePath)
 	}
 	return ChatWithImage(c.ollama, model, prompt, system, options, imagePath)
+}
+
+// Chat sends a request and, when the server says the image did not fit, raises
+// the context and sends it again. num_ctx is a load time parameter, so each
+// change costs a model reload on the server: the new size is kept for every
+// later request, which settles a run on one reload rather than one per image.
+func (c *client) Chat(model string, prompt string, system string, options map[string]any, imagePath string) (string, error) {
+	response, err := c.send(model, prompt, system, options, imagePath)
+	if err == nil || !c.autoCtx {
+		return response, err
+	}
+
+	tokens, tooSmall := ContextTooSmall(err)
+	if !tooSmall {
+		return response, err
+	}
+	size := NextContextSize(tokens, c.numCtx)
+	if size == 0 {
+		return response, err
+	}
+
+	log.Printf("The image needs more context than the model was loaded with, raising it to %d and retrying. "+
+		"The server reloads the model once; --num-ctx %d skips this next time.", size, size)
+	c.numCtx = size
+	return c.send(model, prompt, system, options, imagePath)
 }
 
 func ChatWithImage(ol *api.Client, model string, prompt string, system string, options map[string]any, imagePath string) (string, error) {
@@ -399,7 +437,7 @@ func main() {
 	// Determine which API to use
 	useOpenAI := args.OpenAPI != ""
 
-	var cl client
+	cl := client{numCtx: args.NumCtx, autoCtx: !useOpenAI}
 
 	if useOpenAI {
 		fmt.Printf("Using OpenAI-compatible API at: %s\n", args.OpenAPI)
