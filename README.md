@@ -67,7 +67,7 @@ capollama path/to/images/directory
 ### Command Line Arguments
 
 ```
-Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--language LANGUAGE] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--no-format-check] [--force-one-sentence] [--force] PATH
+Usage: capollama [--dry-run] [--system SYSTEM] [--prompt PROMPT] [--start START] [--end END] [--model MODEL] [--openai OPENAI] [--language LANGUAGE] [--api-key API-KEY] [--xmp] [--keyword-model KEYWORD-MODEL] [--keyword-system KEYWORD-SYSTEM] [--keyword-prompt KEYWORD-PROMPT] [--max-keywords MAX-KEYWORDS] [--no-keywords] [--single-pass] [--single-pass-prompt SINGLE-PASS-PROMPT] [--no-format-check] [--num-ctx NUM-CTX] [--force-one-sentence] [--force] PATH
 
 Positional arguments:
   PATH                   Path to an image or a directory with images
@@ -101,6 +101,7 @@ Options:
   --single-pass-prompt SINGLE-PASS-PROMPT
                          The prompt of the single pass [env: CAPOLLAMA_SINGLE_PASS_PROMPT]
   --no-format-check      Send every file the extension claims is an image, instead of checking its magic bytes first [env: CAPOLLAMA_NO_FORMAT_CHECK]
+  --num-ctx NUM-CTX      Context size the model runs with (0 keeps the server default, which is often 4096; a full size photo needs about 4100 tokens for the image alone, so it will not fit) [default: 0, env: CAPOLLAMA_NUM_CTX]
   --force-one-sentence   Stops generation after the first period (.)
   --force, -f            Also process the image if its caption file already exists
   --help, -h             display this help and exit
@@ -149,6 +150,27 @@ Get both fields from a single request, which is roughly twice as fast:
 ```bash
 capollama --xmp --single-pass path/to/images/
 ```
+
+## Context size
+
+A vision model turns an image into tokens in proportion to its resolution, and
+`qwen2.5vl` saturates at about 4038 tokens for any photo of 2048px or more. That
+leaves around 58 tokens for the prompt inside Ollama's default context of 4096,
+so a full size photo fails before it starts:
+
+```
+request (4103 tokens) exceeds the available context size (4096 tokens)
+```
+
+`--num-ctx` raises it for every pass:
+
+```bash
+capollama --xmp --num-ctx 8192 path/to/images/
+```
+
+Thumbnails and small images fit without it, which is why the default leaves the
+server to decide. The option is an Ollama one and is ignored over `--openai`,
+where the context belongs to the server's own configuration.
 
 ## Image formats
 
@@ -204,6 +226,13 @@ reports as `XMP-dc:Description-es`:
     </rdf:Alt>
    </dc:description>
 ```
+
+Two details of the default prompts are handled for you when the language is not
+English. The keyword pass is told to write *the keywords* in that language,
+since asking for "your answer" in it left models answering in English anyway.
+And the default caption prompt asks the model to start with `"A ..."`, which no
+instruction talks it out of obeying literally, so that clause is dropped rather
+than leaving you with `A hombre de cabello gris`.
 
 `dc:subject` carries no language qualifier, as XMP defines it as an unordered
 bag of plain text. A language outside the built-in table is still passed to the
@@ -286,6 +315,18 @@ exiftool -tagsfromfile image.jpg.xmp -all:all image.jpg
 ```
 
 ## Output
+
+A run ends with a count of what happened:
+
+```
+Done: 412 captioned, 38 already had a caption, 2 unreadable, 1 failed
+```
+
+A file that fails is reported and the run carries on to the next one, so a
+single unreadable image or one that does not fit the context does not cost you
+the rest of the directory. The exit status is 1 when anything failed. A run
+whose requests all fail, such as one pointed at a server that is down, gives up
+after ten failures in a row rather than walking the whole tree.
 
 By default:
 - Captions are printed to stdout in the format:

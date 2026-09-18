@@ -28,6 +28,32 @@ func TestParseLanguage(t *testing.T) {
 	}
 }
 
+func TestInstructKeywords(t *testing.T) {
+	const prompt = "List the keywords."
+	if got := parseLanguage("en").InstructKeywords(prompt); got != prompt {
+		t.Errorf("English must not add an instruction, got %q", got)
+	}
+	// "your answer" was not enough: the model kept answering in English.
+	if got, want := parseLanguage("es").InstructKeywords(prompt), prompt+"\nWrite the keywords in Spanish."; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+func TestDropEnglishOpener(t *testing.T) {
+	const withOpener = `Describe this image. Start your response with "A ..."`
+	const without = "Describe this image."
+
+	if got := parseLanguage("en").DropEnglishOpener(withOpener); got != withOpener {
+		t.Errorf("English must keep its opener, got %q", got)
+	}
+	if got := parseLanguage("es").DropEnglishOpener(withOpener); got != without {
+		t.Errorf("got %q, want %q", got, without)
+	}
+	if got := parseLanguage("es").DropEnglishOpener(without); got != without {
+		t.Errorf("a prompt without the clause must be untouched, got %q", got)
+	}
+}
+
 func TestInstruct(t *testing.T) {
 	const prompt = "Describe this image."
 
