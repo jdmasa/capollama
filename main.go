@@ -133,14 +133,13 @@ func singlePassOptions(args cmdArgs) map[string]any {
 	return opts
 }
 
-// abort ends the run on an API error. A model whose context is too small for a
-// photo is the one failure that does not explain itself, so it gets a hint.
-func abort(err error, args cmdArgs) {
+// hint explains the one failure that does not explain itself: a model whose
+// context is too small to hold the image at all.
+func hint(err error, args cmdArgs) string {
 	if args.NumCtx == 0 && strings.Contains(err.Error(), "context size") {
-		log.Fatalf("Aborting because of %v\n"+
-			"  The image alone fills about 4100 tokens, which does not fit the default context of 4096. Try --num-ctx 8192.", err)
+		return "\n  The image alone fills about 4100 tokens, which does not fit the default context of 4096. Try --num-ctx 8192."
 	}
-	log.Fatalf("Aborting because of %v", err)
+	return ""
 }
 
 // captionFileName returns the file a caption is written to. XMP sidecars keep
@@ -437,6 +436,11 @@ func main() {
 	}
 	fmt.Printf("Scanning: %s\n", args.Path)
 
+	// maxConsecutiveFailures stops a run whose every request fails, such as one
+	// pointed at a server that is down, without giving up on a single bad file.
+	const maxConsecutiveFailures = 10
+	var done, skipped, unreadable, failed, consecutive int
+
 	//  and mention "colorized photo"
 	err := ProcessImages(args.Path, func(path string, root string) {
 		captionFile := captionFileName(path, args.XMP)
@@ -445,6 +449,7 @@ func main() {
 			// skipping this if caption file exists
 			_, err := os.Stat(captionFile)
 			if err == nil {
+				skipped++
 				return
 			}
 		}
@@ -455,10 +460,12 @@ func main() {
 			format, err := SniffFile(path)
 			if err != nil {
 				log.Printf("Skipping %s: %v", name, err)
+				unreadable++
 				return
 			}
 			if reason := SkipReason(format); reason != "" {
 				log.Printf("Skipping %s: %s", name, reason)
+				unreadable++
 				return
 			}
 		}
@@ -466,10 +473,20 @@ func main() {
 		var captionText string
 		var keywords []string
 
+		fail := func(err error) {
+			log.Printf("Failed on %s: %v%s", name, err, hint(err, args))
+			failed++
+			consecutive++
+			if consecutive >= maxConsecutiveFailures {
+				log.Fatalf("Giving up after %d failures in a row", consecutive)
+			}
+		}
+
 		if args.SinglePass {
 			answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(args), path)
 			if err != nil {
-				abort(err, args)
+				fail(err)
+				return
 			}
 			var ok bool
 			captionText, keywords, ok = ParseSinglePass(answer)
@@ -479,17 +496,21 @@ func main() {
 		} else {
 			text, err := cl.Chat(args.Model, prompt, args.System, options(args), path)
 			if err != nil {
-				abort(err, args)
+				fail(err)
+				return
 			}
 			captionText = text
 			if withKeywords {
 				rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(args), path)
 				if err != nil {
-					abort(err, args)
+					fail(err)
+					return
 				}
 				keywords = ParseKeywords(rawKeywords)
 			}
 		}
+		consecutive = 0
+		done++
 
 		captionText = strings.TrimSpace(args.StartCaption + " " + captionText + " " + args.EndCaption)
 		if args.MaxKeywords > 0 && len(keywords) > args.MaxKeywords {
@@ -513,8 +534,13 @@ func main() {
 			log.Fatalf("Could not write file %q", err)
 		}
 	})
+	fmt.Printf("Done: %d captioned, %d already had a caption, %d unreadable, %d failed\n",
+		done, skipped, unreadable, failed)
 	if err != nil {
 		log.Printf("Error: %s", err.Error())
+		os.Exit(1)
+	}
+	if failed > 0 {
 		os.Exit(1)
 	}
 }

@@ -316,6 +316,18 @@ exiftool -tagsfromfile image.jpg.xmp -all:all image.jpg
 
 ## Output
 
+A run ends with a count of what happened:
+
+```
+Done: 412 captioned, 38 already had a caption, 2 unreadable, 1 failed
+```
+
+A file that fails is reported and the run carries on to the next one, so a
+single unreadable image or one that does not fit the context does not cost you
+the rest of the directory. The exit status is 1 when anything failed. A run
+whose requests all fail, such as one pointed at a server that is down, gives up
+after ten failures in a row rather than walking the whole tree.
+
 By default:
 - Captions are printed to stdout in the format:
   ```
