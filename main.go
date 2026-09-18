@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/alexflint/go-arg"
 	"github.com/ollama/ollama/api"
@@ -479,111 +480,125 @@ func main() {
 	const maxConsecutiveFailures = 10
 	var done, skipped, unreadable, failed, consecutive int
 
+	paths, root, err := CollectImages(args.Path, func(found int) {
+		fmt.Fprintf(os.Stderr, "  %d images so far...\n", found)
+	})
+	if err != nil {
+		log.Printf("Error: %s", err.Error())
+		os.Exit(1)
+	}
+	fmt.Printf("Found %d images\n", len(paths))
+
+	bar := newProgress(len(paths))
+
 	//  and mention "colorized photo"
-	err := ProcessImages(args.Path, func(path string, root string) {
-		captionFile := captionFileName(path, args.XMP)
+	for index, path := range paths {
+		func() {
+			captionFile := captionFileName(path, args.XMP)
 
-		if !args.Force {
-			// skipping this if caption file exists
-			_, err := os.Stat(captionFile)
-			if err == nil {
-				skipped++
-				return
+			if !args.Force {
+				// skipping this if caption file exists
+				_, err := os.Stat(captionFile)
+				if err == nil {
+					skipped++
+					return
+				}
 			}
-		}
 
-		name := strings.TrimPrefix(path, root)
+			name := strings.TrimPrefix(path, root)
 
-		if !args.NoFormatCheck {
-			format, err := SniffFile(path)
-			if err != nil {
-				log.Printf("Skipping %s: %v", name, err)
-				unreadable++
-				return
+			if !args.NoFormatCheck {
+				format, err := SniffFile(path)
+				if err != nil {
+					log.Printf("Skipping %s: %v", name, err)
+					unreadable++
+					return
+				}
+				if reason := SkipReason(format); reason != "" {
+					log.Printf("Skipping %s: %s", name, reason)
+					unreadable++
+					return
+				}
 			}
-			if reason := SkipReason(format); reason != "" {
-				log.Printf("Skipping %s: %s", name, reason)
-				unreadable++
-				return
-			}
-		}
 
-		var captionText string
-		var keywords []string
+			var captionText string
+			var keywords []string
 
-		fail := func(err error) {
-			log.Printf("Failed on %s: %v%s", name, err, hint(err, args))
-			failed++
-			consecutive++
-			if consecutive >= maxConsecutiveFailures {
-				log.Fatalf("Giving up after %d failures in a row", consecutive)
-			}
-		}
+			bar.Starting(index+1, name)
+			startedAt := time.Now()
 
-		if args.SinglePass {
-			answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(args), path)
-			if err != nil {
-				fail(err)
-				return
+			fail := func(err error) {
+				log.Printf("Failed on %s: %v%s", name, err, hint(err, args))
+				failed++
+				consecutive++
+				if consecutive >= maxConsecutiveFailures {
+					log.Fatalf("Giving up after %d failures in a row", consecutive)
+				}
 			}
-			var ok bool
-			captionText, keywords, ok = ParseSinglePass(answer)
-			if !ok {
-				log.Printf("Warning: no keyword line in the answer for %s, keeping the reply as the description", name)
-			}
-		} else {
-			text, err := cl.Chat(args.Model, prompt, args.System, options(args), path)
-			if err != nil {
-				fail(err)
-				return
-			}
-			captionText = text
-			if withKeywords {
-				rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(args), path)
+
+			if args.SinglePass {
+				answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(args), path)
 				if err != nil {
 					fail(err)
 					return
 				}
-				keywords = ParseKeywords(rawKeywords)
+				var ok bool
+				captionText, keywords, ok = ParseSinglePass(answer)
+				if !ok {
+					log.Printf("Warning: no keyword line in the answer for %s, keeping the reply as the description", name)
+				}
+			} else {
+				text, err := cl.Chat(args.Model, prompt, args.System, options(args), path)
+				if err != nil {
+					fail(err)
+					return
+				}
+				captionText = text
+				if withKeywords {
+					rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(args), path)
+					if err != nil {
+						fail(err)
+						return
+					}
+					keywords = ParseKeywords(rawKeywords)
+				}
 			}
-		}
-		consecutive = 0
-		done++
+			consecutive = 0
+			done++
+			bar.Done(time.Since(startedAt))
 
-		captionText = strings.TrimSpace(args.StartCaption + " " + captionText + " " + args.EndCaption)
-		if args.MaxKeywords > 0 && len(keywords) > args.MaxKeywords {
-			keywords = keywords[:args.MaxKeywords]
-		}
+			captionText = strings.TrimSpace(args.StartCaption + " " + captionText + " " + args.EndCaption)
+			if args.MaxKeywords > 0 && len(keywords) > args.MaxKeywords {
+				keywords = keywords[:args.MaxKeywords]
+			}
 
-		fmt.Printf("%s: %s\n", name, captionText)
-		if withKeywords {
-			fmt.Printf("%s keywords: %s\n", name, strings.Join(keywords, ", "))
-		}
+			fmt.Printf("%s: %s\n", name, captionText)
+			if withKeywords {
+				fmt.Printf("%s keywords: %s\n", name, strings.Join(keywords, ", "))
+			}
 
-		if args.DryRun {
-			return
-		}
+			if args.DryRun {
+				return
+			}
 
-		content := captionText
-		if args.XMP {
-			content = BuildXMP(captionText, keywords, lang.Tag())
-		}
-		if err := os.WriteFile(captionFile, []byte(content), 0644); err != nil {
-			log.Fatalf("Could not write file %q", err)
-		}
-	})
+			content := captionText
+			if args.XMP {
+				content = BuildXMP(captionText, keywords, lang.Tag())
+			}
+			if err := os.WriteFile(captionFile, []byte(content), 0644); err != nil {
+				log.Fatalf("Could not write file %q", err)
+			}
+		}()
+	}
+
 	// A dry run captions nothing, and saying otherwise reads as if the sidecars
 	// were written and leaves you wondering why the next run redoes them.
 	if args.DryRun {
-		fmt.Printf("Done (dry run, nothing written): %d would be captioned, %d already had a caption, "+
-			"%d unreadable, %d failed\n", done, skipped, unreadable, failed)
+		fmt.Printf("Done (dry run, nothing written) in %s: %d would be captioned, %d already had a caption, "+
+			"%d unreadable, %d failed\n", formatDuration(bar.Elapsed()), done, skipped, unreadable, failed)
 	} else {
-		fmt.Printf("Done: %d captioned, %d already had a caption, %d unreadable, %d failed\n",
-			done, skipped, unreadable, failed)
-	}
-	if err != nil {
-		log.Printf("Error: %s", err.Error())
-		os.Exit(1)
+		fmt.Printf("Done in %s: %d captioned, %d already had a caption, %d unreadable, %d failed\n",
+			formatDuration(bar.Elapsed()), done, skipped, unreadable, failed)
 	}
 	if failed > 0 {
 		os.Exit(1)

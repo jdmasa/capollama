@@ -337,17 +337,43 @@ exiftool -tagsfromfile image.jpg.xmp -all:all image.jpg
 
 ## Output
 
+A run says where it has got to. The images are counted first, so every line
+carries a position, and an estimate appears once there is enough history to
+base one on:
+
+```
+Scanning: /mnt/photodata/data
+  2000 images so far...
+Found 4821 images
+[1/4821] /2019/IMG_0001.jpg
+/2019/IMG_0001.jpg: Un gato naranja sentado en una terraza de madera soleada.
+/2019/IMG_0001.jpg keywords: gato, terraza, sol
+[2/4821] /2019/IMG_0002.jpg  eta 3h41m
+```
+
+Images that already have a caption, or that cannot be read, are passed over
+without a line and without a request, so the numbering jumps ahead. The counting
+pass reports as it goes, since on a network mount a large tree takes a while to
+walk and silence there looks like a hang.
+
+Progress goes to stderr and captions to stdout, so redirecting stdout still
+gives you nothing but captions:
+
+```bash
+capollama --xmp path/to/images/ > captions.txt
+```
+
 A run ends with a count of what happened:
 
 ```
-Done: 412 captioned, 38 already had a caption, 2 unreadable, 1 failed
+Done in 2h14m: 412 captioned, 38 already had a caption, 2 unreadable, 1 failed
 ```
 
 A dry run says so, since it writes no sidecars and therefore skips nothing on
 the next run either:
 
 ```
-Done (dry run, nothing written): 450 would be captioned, 0 already had a caption, 2 unreadable, 1 failed
+Done (dry run, nothing written) in 2h14m: 450 would be captioned, 0 already had a caption, 2 unreadable, 1 failed
 ```
 
 A file that fails is reported and the run carries on to the next one, so a
