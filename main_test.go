@@ -59,32 +59,37 @@ func TestPromptDefaults(t *testing.T) {
 		t.Error("the English opener was not removed from the default prompt")
 	}
 
+	// The keyword defaults must not hand the model words it can echo as tags.
+	for _, word := range []string{"archive", "image", "refusals"} {
+		if strings.Contains(strings.ToLower(args.KeywordPrompt+" "+args.KeywordSystem), word) {
+			t.Errorf("the keyword defaults still mention %q, which models return as a keyword", word)
+		}
+	}
+
 	if args.Language != "English" {
 		t.Errorf("default language = %q, want English", args.Language)
 	}
 }
 
-func TestNumCtx(t *testing.T) {
-	// Left alone by default, so the server keeps deciding.
+func TestContextSizeIsAddedByTheClient(t *testing.T) {
+	// The passes themselves say nothing about it, so one place decides.
 	for name, opts := range map[string]map[string]any{
-		"caption":     options(cmdArgs{}),
-		"keyword":     keywordOptions(cmdArgs{}),
-		"single pass": singlePassOptions(cmdArgs{}),
+		"caption":     options(cmdArgs{NumCtx: 8192}),
+		"keyword":     keywordOptions(cmdArgs{NumCtx: 8192}),
+		"single pass": singlePassOptions(cmdArgs{NumCtx: 8192}),
 	} {
 		if _, ok := opts["num_ctx"]; ok {
-			t.Errorf("the %s pass must not send num_ctx unless asked", name)
+			t.Errorf("the %s pass must leave num_ctx to the client", name)
 		}
 	}
-	// A photo needs the whole context, so every pass has to carry the setting.
-	args := cmdArgs{NumCtx: 8192}
-	for name, opts := range map[string]map[string]any{
-		"caption":     options(args),
-		"keyword":     keywordOptions(args),
-		"single pass": singlePassOptions(args),
-	} {
-		if opts["num_ctx"] != 8192 {
-			t.Errorf("the %s pass sent num_ctx %v, want 8192", name, opts["num_ctx"])
-		}
+
+	none := (&client{}).withContext(map[string]any{})
+	if _, ok := none["num_ctx"]; ok {
+		t.Error("a client with no size set must leave the server to decide")
+	}
+	set := (&client{numCtx: 8192}).withContext(map[string]any{})
+	if set["num_ctx"] != 8192 {
+		t.Errorf("sent num_ctx %v, want 8192", set["num_ctx"])
 	}
 }
 

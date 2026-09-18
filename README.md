@@ -162,15 +162,36 @@ so a full size photo fails before it starts:
 request (4103 tokens) exceeds the available context size (4096 tokens)
 ```
 
-`--num-ctx` raises it for every pass:
+This is handled for you. When the server reports that a request did not fit,
+capollama reads the token count out of the error, raises the context to the next
+power of two that holds it and sends the image again:
+
+```
+The image needs more context than the model was loaded with, raising it to 8192
+and retrying. The server reloads the model once; --num-ctx 8192 skips this next time.
+```
+
+The new size is kept for every later request in the run. That matters because
+`num_ctx` is a load time parameter: each change makes Ollama reload the model, so
+a run settles on one size and pays for one reload rather than one per image.
+
+`--num-ctx` sets it up front and skips that first reload:
 
 ```bash
 capollama --xmp --num-ctx 8192 path/to/images/
 ```
 
-Thumbnails and small images fit without it, which is why the default leaves the
-server to decide. The option is an Ollama one and is ignored over `--openai`,
-where the context belongs to the server's own configuration.
+Raising it is capped at 16384, well above what a picture can need, since the
+context is allocated on the server. The option is an Ollama one and is ignored
+over `--openai`, where the context belongs to the server's own configuration.
+
+### Keywords that are not about the picture
+
+Small models answer with words taken from their own instructions: a run whose
+keyword prompt mentioned an archive came back tagging photos `archive`, `image`
+and `no refusals`. The default prompts avoid such bait, and words that describe
+the job rather than the picture are dropped from the list, since in a library
+where every item is a photo none of them helps you find anything.
 
 ## Image formats
 
