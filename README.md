@@ -343,6 +343,13 @@ A run ends with a count of what happened:
 Done: 412 captioned, 38 already had a caption, 2 unreadable, 1 failed
 ```
 
+A dry run says so, since it writes no sidecars and therefore skips nothing on
+the next run either:
+
+```
+Done (dry run, nothing written): 450 would be captioned, 0 already had a caption, 2 unreadable, 1 failed
+```
+
 A file that fails is reported and the run carries on to the next one, so a
 single unreadable image or one that does not fit the context does not cost you
 the rest of the directory. The exit status is 1 when anything failed. A run
