@@ -89,6 +89,29 @@ func (l language) Instruct(prompt string) string {
 	return prompt + "\n" + fmt.Sprintf("Write your answer in %s.", l.Name)
 }
 
+// InstructKeywords appends the language instruction to the keyword prompt.
+// "your answer" is too vague here: models read the keyword prompt as an English
+// instruction and answer in English regardless, so the keywords are named.
+func (l language) InstructKeywords(prompt string) string {
+	if l.IsEnglish() {
+		return prompt
+	}
+	return prompt + "\n" + fmt.Sprintf("Write the keywords in %s.", l.Name)
+}
+
+// DropEnglishOpener removes the clause of the default prompt that asks for a
+// caption starting with "A ...". No instruction talks a model out of obeying it
+// literally, so a caption in another language would open with an English word.
+func (l language) DropEnglishOpener(prompt string) string {
+	if l.IsEnglish() {
+		return prompt
+	}
+	if index := strings.Index(prompt, `Start your response with "A ..."`); index >= 0 {
+		return strings.TrimSpace(prompt[:index])
+	}
+	return prompt
+}
+
 // InstructSinglePass appends the language instruction to the combined prompt.
 // The labels have to stay English there, as they are what the parser looks for.
 func (l language) InstructSinglePass(prompt string) string {
