@@ -8,6 +8,18 @@ import (
 	"strings"
 )
 
+// metaKeywords are words a model echoes back from its own instructions rather
+// than reading them off the image. None of them says anything about a picture
+// in a library where every item is a picture, and "no refusals" is simply the
+// system prompt talking.
+var metaKeywords = map[string]bool{
+	"archive": true, "caption": true, "description": true, "image": true,
+	"images": true, "keyword": true, "keywords": true, "no refusals": true,
+	"photo": true, "photograph": true, "photography": true, "photos": true,
+	"picture": true, "pictures": true, "refusal": true, "refusals": true,
+	"search": true, "subject": true, "tag": true, "tags": true,
+}
+
 // maxKeywordLength guards against the model answering with a sentence instead of
 // a keyword. Anything longer is not a tag and gets dropped.
 const maxKeywordLength = 64
@@ -43,7 +55,11 @@ func ParseKeywords(raw string) []string {
 		if strings.HasSuffix(keyword, ":") {
 			continue
 		}
-		if key := strings.ToLower(keyword); !seen[key] {
+		key := strings.ToLower(keyword)
+		if metaKeywords[key] {
+			continue
+		}
+		if !seen[key] {
 			seen[key] = true
 			keywords = append(keywords, keyword)
 		}

@@ -20,6 +20,10 @@ func TestParseKeywords(t *testing.T) {
 		{"quotes and stops", "\"cat\"; 'outdoor'.", []string{"cat", "outdoor"}},
 		{"sentences are not keywords", "cat, " + strings.Repeat("x", maxKeywordLength+1), []string{"cat"}},
 		{"empty", "", nil},
+		// Words echoed back from the prompts rather than read off the image.
+		{"instruction leakage", "motorcycle, no refusals, archive, image, chrome",
+			[]string{"motorcycle", "chrome"}},
+		{"only leakage", "keywords, tags, photo", nil},
 	}
 	for _, c := range cases {
 		if got := ParseKeywords(c.in); !reflect.DeepEqual(got, c.want) {
