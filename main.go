@@ -572,8 +572,15 @@ func main() {
 			log.Fatalf("Could not write file %q", err)
 		}
 	})
-	fmt.Printf("Done: %d captioned, %d already had a caption, %d unreadable, %d failed\n",
-		done, skipped, unreadable, failed)
+	// A dry run captions nothing, and saying otherwise reads as if the sidecars
+	// were written and leaves you wondering why the next run redoes them.
+	if args.DryRun {
+		fmt.Printf("Done (dry run, nothing written): %d would be captioned, %d already had a caption, "+
+			"%d unreadable, %d failed\n", done, skipped, unreadable, failed)
+	} else {
+		fmt.Printf("Done: %d captioned, %d already had a caption, %d unreadable, %d failed\n",
+			done, skipped, unreadable, failed)
+	}
 	if err != nil {
 		log.Printf("Error: %s", err.Error())
 		os.Exit(1)
