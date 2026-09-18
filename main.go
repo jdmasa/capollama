@@ -80,6 +80,7 @@ type cmdArgs struct {
 	SinglePass       bool   `arg:"--single-pass,env:CAPOLLAMA_SINGLE_PASS" help:"Get the description and the keywords from one request instead of two (faster, but needs a model that keeps to the answer format)"`
 	SinglePassPrompt string `arg:"--single-pass-prompt,env:CAPOLLAMA_SINGLE_PASS_PROMPT" help:"The prompt of the single pass" default:"Describe and tag this image for archival and search. Answer with exactly two lines and nothing else:\nDESCRIPTION: one long sentence describing the image, starting with \"A ...\". If there is a person, tell age, sex and pose.\nKEYWORDS: at most 15 lowercase keywords separated by commas, covering subjects, objects, location, setting, activity, style and mood."`
 	NoFormatCheck    bool   `arg:"--no-format-check,env:CAPOLLAMA_NO_FORMAT_CHECK" help:"Send every file the extension claims is an image, instead of checking its magic bytes first"`
+	NumCtx           int    `arg:"--num-ctx,env:CAPOLLAMA_NUM_CTX" help:"Context size the model runs with (0 keeps the server default, which is often 4096; a full size photo needs about 4100 tokens for the image alone, so it will not fit)" default:"0"`
 	ForceOneSentence bool   `arg:"--force-one-sentence" help:"Stops generation after the first period (.)"`
 	Force            bool   `arg:"--force,-f" help:"Also process the image if its caption file already exists"`
 }
@@ -94,36 +95,52 @@ func (cmdArgs) Version() string {
 }
 
 func options(args cmdArgs) map[string]any {
-	opts := map[string]any{
-		"num_predict": 200,
-		"temperature": 0,
-		"seed":        1,
-	}
+	opts := baseOptions(args)
+	opts["num_predict"] = 200
 	if args.ForceOneSentence {
 		opts["stop"] = []string{"."}
 	}
 	return opts
 }
 
-// keywordOptions are the options of the keyword pass. They deliberately ignore
-// --force-one-sentence because a list of keywords holds no period to stop at.
-func keywordOptions() map[string]any {
-	return map[string]any{
-		"num_predict": 200,
+// baseOptions holds what every pass sends. num_ctx is only included when asked
+// for, so the server keeps deciding by default.
+func baseOptions(args cmdArgs) map[string]any {
+	opts := map[string]any{
 		"temperature": 0,
 		"seed":        1,
 	}
+	if args.NumCtx > 0 {
+		opts["num_ctx"] = args.NumCtx
+	}
+	return opts
+}
+
+// keywordOptions are the options of the keyword pass. They deliberately ignore
+// --force-one-sentence because a list of keywords holds no period to stop at.
+func keywordOptions(args cmdArgs) map[string]any {
+	opts := baseOptions(args)
+	opts["num_predict"] = 200
+	return opts
 }
 
 // singlePassOptions are the options of the combined pass. It has to fit a
 // description and a keyword list into one answer, so it gets a larger budget
 // than a caption alone.
-func singlePassOptions() map[string]any {
-	return map[string]any{
-		"num_predict": 400,
-		"temperature": 0,
-		"seed":        1,
+func singlePassOptions(args cmdArgs) map[string]any {
+	opts := baseOptions(args)
+	opts["num_predict"] = 400
+	return opts
+}
+
+// abort ends the run on an API error. A model whose context is too small for a
+// photo is the one failure that does not explain itself, so it gets a hint.
+func abort(err error, args cmdArgs) {
+	if args.NumCtx == 0 && strings.Contains(err.Error(), "context size") {
+		log.Fatalf("Aborting because of %v\n"+
+			"  The image alone fills about 4100 tokens, which does not fit the default context of 4096. Try --num-ctx 8192.", err)
 	}
+	log.Fatalf("Aborting because of %v", err)
 }
 
 // captionFileName returns the file a caption is written to. XMP sidecars keep
@@ -343,6 +360,12 @@ func main() {
 	if args.MaxKeywords < 0 {
 		parser.Fail("--max-keywords cannot be negative")
 	}
+	if args.NumCtx < 0 {
+		parser.Fail("--num-ctx cannot be negative")
+	}
+	if args.NumCtx > 0 && args.OpenAPI != "" {
+		log.Printf("Warning: --num-ctx is an Ollama option and is ignored over the OpenAI protocol, where the context is set on the server")
+	}
 	if args.SinglePass {
 		// The combined pass answers with one description line and one keyword
 		// line, which leaves nothing for these to act on.
@@ -362,8 +385,8 @@ func main() {
 		log.Printf("Warning: unknown language %q, asking the model for it anyway but tagging the sidecar as x-default only", args.Language)
 	}
 	// The language instruction is appended once, not per image.
-	prompt := lang.Instruct(args.Prompt)
-	keywordPrompt := lang.Instruct(args.KeywordPrompt)
+	prompt := lang.Instruct(lang.DropEnglishOpener(args.Prompt))
+	keywordPrompt := lang.InstructKeywords(args.KeywordPrompt)
 	singlePassPrompt := lang.InstructSinglePass(args.SinglePassPrompt)
 
 	// The keyword pass looks at the image a second time, so it defaults to the
@@ -444,9 +467,9 @@ func main() {
 		var keywords []string
 
 		if args.SinglePass {
-			answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(), path)
+			answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(args), path)
 			if err != nil {
-				log.Fatalf("Aborting because of %v", err)
+				abort(err, args)
 			}
 			var ok bool
 			captionText, keywords, ok = ParseSinglePass(answer)
@@ -456,13 +479,13 @@ func main() {
 		} else {
 			text, err := cl.Chat(args.Model, prompt, args.System, options(args), path)
 			if err != nil {
-				log.Fatalf("Aborting because of %v", err)
+				abort(err, args)
 			}
 			captionText = text
 			if withKeywords {
-				rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(), path)
+				rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(args), path)
 				if err != nil {
-					log.Fatalf("Aborting because of %v", err)
+					abort(err, args)
 				}
 				keywords = ParseKeywords(rawKeywords)
 			}
