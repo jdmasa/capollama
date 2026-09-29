@@ -379,8 +379,19 @@ Done (dry run, nothing written) in 2h14m: 450 would be captioned, 0 already had 
 A file that fails is reported and the run carries on to the next one, so a
 single unreadable image or one that does not fit the context does not cost you
 the rest of the directory. The exit status is 1 when anything failed. A run
-whose requests all fail, such as one pointed at a server that is down, gives up
-after ten failures in a row rather than walking the whole tree.
+never gives up on its own, however many files fail in a row.
+
+When a request fails for a reason other than the file, such as a model that is
+still loading or a server that restarted, it is sent again after a pause of 90
+seconds. If it fails a second time the file is counted as failed and the run
+moves on to the next one, which gets its own retry:
+
+```
+Request for /holiday.jpg failed, retrying in 1m30s: connection refused
+```
+
+Failures that are the file's fault, such as a format the API cannot load or an
+image too large for any context, are not retried.
 
 By default:
 - Captions are printed to stdout in the format:

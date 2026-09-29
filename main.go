@@ -475,10 +475,7 @@ func main() {
 	}
 	fmt.Printf("Scanning: %s\n", args.Path)
 
-	// maxConsecutiveFailures stops a run whose every request fails, such as one
-	// pointed at a server that is down, without giving up on a single bad file.
-	const maxConsecutiveFailures = 10
-	var done, skipped, unreadable, failed, consecutive int
+	var done, skipped, unreadable, failed int
 
 	paths, root, err := CollectImages(args.Path, func(found int) {
 		fmt.Fprintf(os.Stderr, "  %d images so far...\n", found)
@@ -528,16 +525,22 @@ func main() {
 			startedAt := time.Now()
 
 			fail := func(err error) {
-				log.Printf("Failed on %s: %v%s", name, err, hint(err, args))
+				log.Printf("Failed on %s, moving on to the next file: %v%s", name, err, hint(err, args))
 				failed++
-				consecutive++
-				if consecutive >= maxConsecutiveFailures {
-					log.Fatalf("Giving up after %d failures in a row", consecutive)
-				}
+			}
+
+			// A failure that is not the file's fault gets one more try after a
+			// pause, as the model or the server may only be down for a moment.
+			chat := func(model, prompt, system string, options map[string]any) (string, error) {
+				return withRetry(func() (string, error) {
+					return cl.Chat(model, prompt, system, options, path)
+				}, retryPause, time.Sleep, func(err error) {
+					log.Printf("Request for %s failed, retrying in %s: %v", name, formatDuration(retryPause), err)
+				})
 			}
 
 			if args.SinglePass {
-				answer, err := cl.Chat(args.Model, singlePassPrompt, args.System, singlePassOptions(args), path)
+				answer, err := chat(args.Model, singlePassPrompt, args.System, singlePassOptions(args))
 				if err != nil {
 					fail(err)
 					return
@@ -548,14 +551,14 @@ func main() {
 					log.Printf("Warning: no keyword line in the answer for %s, keeping the reply as the description", name)
 				}
 			} else {
-				text, err := cl.Chat(args.Model, prompt, args.System, options(args), path)
+				text, err := chat(args.Model, prompt, args.System, options(args))
 				if err != nil {
 					fail(err)
 					return
 				}
 				captionText = text
 				if withKeywords {
-					rawKeywords, err := cl.Chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(args), path)
+					rawKeywords, err := chat(keywordModel, keywordPrompt, args.KeywordSystem, keywordOptions(args))
 					if err != nil {
 						fail(err)
 						return
@@ -563,7 +566,6 @@ func main() {
 					keywords = ParseKeywords(rawKeywords)
 				}
 			}
-			consecutive = 0
 			done++
 			bar.Done(time.Since(startedAt))
 
